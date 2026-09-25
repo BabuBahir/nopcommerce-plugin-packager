@@ -5,3 +5,5 @@ obj/
 *.pubxml
 *.zip
 *.zip.json
+config.bat
+node_modules
