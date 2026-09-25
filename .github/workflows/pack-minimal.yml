@@ -1,0 +1,17 @@
+name: Pack plugin minimal
+
+on:
+  workflow_call:
+    inputs:
+      nopcommerce-release:
+        description: nopCommerce release tag
+        required: false
+        type: string
+        default: release-4.90.8
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say hello
+        run: echo "hello from the reusable workflow, release=${{ inputs['nopcommerce-release'] }}"
