@@ -1,0 +1,154 @@
+name: Pack plugin
+
+# Reusable workflow: adds a nopCommerce plugin package artifact to a plugin repository.
+#
+# The calling repository only needs a five line workflow:
+#
+#   jobs:
+#     package:
+#       uses: BabuBahir/nopcommerce-plugin-packager/.github/workflows/pack-plugin.yml@v1
+#       with:
+#         nopcommerce-release: release-4.90.8
+#
+# Pin the reference to a tag or a commit SHA, not a branch, so a change in this
+# repository cannot silently change what a release artifact contains.
+
+on:
+  workflow_call:
+    inputs:
+      nopcommerce-repository:
+        description: nopCommerce repository used as the build dependency
+        required: false
+        type: string
+        default: nopSolutions/nopCommerce
+      nopcommerce-release:
+        description: nopCommerce release tag to build against
+        required: false
+        type: string
+        default: release-4.90.8
+      packager-ref:
+        description: Reference of this packager repository to run
+        required: false
+        type: string
+        default: v1
+      artifact-name:
+        description: Artifact name. Defaults to plugin-package-<system name>.
+        required: false
+        type: string
+        default: ''
+      artifact-retention-days:
+        description: How long to keep the artifact
+        required: false
+        type: string
+        default: '30'
+    outputs:
+      system-name:
+        description: Plugin system name taken from the package metadata
+        value: ${{ steps.meta.outputs.system-name }}
+      nopcommerce-version:
+        description: nopCommerce version the plugin was built against
+        value: ${{ steps.meta.outputs.nopcommerce-version }}
+      plugin-version:
+        description: Plugin version from plugin.json
+        value: ${{ steps.meta.outputs.plugin-version }}
+
+jobs:
+  pack:
+    name: Build and package plugin
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout plugin repository
+        uses: actions/checkout@v4
+
+      - name: Checkout packager
+        uses: actions/checkout@v4
+        with:
+          repository: BabuBahir/nopcommerce-plugin-packager
+          ref: ${{ inputs.packager-ref }}
+          path: .packager
+
+      - name: Clone nopCommerce source
+        # Public repository, cloned anonymously: avoids cross-repository GITHUB_TOKEN
+        # restrictions. The plugin csproj has a ProjectReference to Nop.Web.csproj, so
+        # the plugin cannot be built without the matching nopCommerce source.
+        run: |
+          git clone --depth 1 --branch '${{ inputs.nopcommerce-release }}' \
+            https://github.com/${{ inputs.nopcommerce-repository }}.git nopCommerce
+
+      - name: Resolve .NET SDK
+        id: sdk
+        # Take the SDK from the tree's own global.json rather than pinning one here, so a
+        # different nopCommerce release cannot fail on an SDK mismatch.
+        run: |
+          version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' nopCommerce/global.json | head -1)
+          echo "global.json requests SDK $version"
+          echo "version=${version%.*}.x" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ steps.sdk.outputs.version }}
+
+      - name: Report environment
+        run: |
+          grep -E 'CURRENT_VERSION' nopCommerce/src/Libraries/Nop.Core/NopVersion.cs || true
+          dotnet --version
+
+      - name: Build and package
+        shell: pwsh
+        run: |
+          ./.packager/build/Build-PluginPackage.ps1 `
+            -RepoRoot "${{ github.workspace }}" `
+            -NopCommerceSrc "${{ github.workspace }}/nopCommerce" `
+            -OutputZip "${{ github.workspace }}/out/plugin-package.zip" `
+            2>&1 | Tee-Object -FilePath package.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content package.log
+
+      - name: Check archive entry names
+        run: |
+          cd out
+          unzip -l plugin-package.zip
+          # nopCommerce matches entry.FullName against forward-slash literals, so a single
+          # backslash entry name means the admin reports zero plugins
+          if unzip -Z1 plugin-package.zip | grep -q '\\'; then
+            echo "::error::archive contains backslash entry names; nopCommerce will report 0 plugins"
+            exit 1
+          fi
+
+      - name: Read package metadata
+        id: meta
+        run: |
+          meta=out/plugin-package.zip.json
+          test -f "$meta"
+          echo "system-name=$(jq -r .systemName "$meta")" >> "$GITHUB_OUTPUT"
+          echo "nopcommerce-version=$(jq -r .nopCommerceVersion "$meta")" >> "$GITHUB_OUTPUT"
+          echo "plugin-version=$(jq -r .pluginVersion "$meta")" >> "$GITHUB_OUTPUT"
+          echo "entry-count=$(jq -r .entryCount "$meta")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(jq -r .sha256 "$meta")" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plugin package"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| system name | $(jq -r .systemName "$meta") |"
+            echo "| plugin version | $(jq -r .pluginVersion "$meta") |"
+            echo "| nopCommerce | $(jq -r .nopCommerceVersion "$meta") |"
+            echo "| layout | $(jq -r .layout "$meta") |"
+            echo "| entries | $(jq -r .entryCount "$meta") |"
+            echo "| sha256 | $(jq -r .sha256 "$meta") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name != '' && inputs.artifact-name || format('plugin-package-{0}', steps.meta.outputs.system-name) }}
+          path: |
+            out/plugin-package.zip
+            out/plugin-package.zip.json
+            package.log
+          if-no-files-found: error
+          retention-days: ${{ inputs.artifact-retention-days }}

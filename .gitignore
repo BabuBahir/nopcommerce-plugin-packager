@@ -1,0 +1,7 @@
+bin/
+obj/
+.vs/
+*.user
+*.pubxml
+*.zip
+*.zip.json
