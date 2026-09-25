@@ -17,7 +17,7 @@ on:
         description: Reference of this packager repository to run
         required: false
         type: string
-        default: v1
+        default: v1.2.0
       artifact-name:
         description: Artifact name. Defaults to plugin-package-<system name>.
         required: false
