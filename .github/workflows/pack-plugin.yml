@@ -1,18 +1,5 @@
 name: Pack plugin
 
-# Reusable workflow: adds a nopCommerce plugin package artifact to a plugin repository.
-#
-# The calling repository only needs a five line workflow:
-#
-#   jobs:
-#     package:
-#       uses: BabuBahir/nopcommerce-plugin-packager/.github/workflows/pack-plugin.yml@v1
-#       with:
-#         nopcommerce-release: release-4.90.8
-#
-# Pin the reference to a tag or a commit SHA, not a branch, so a change in this
-# repository cannot silently change what a release artifact contains.
-
 on:
   workflow_call:
     inputs:
@@ -44,13 +31,13 @@ on:
     outputs:
       system-name:
         description: Plugin system name taken from the package metadata
-        value: ${{ steps.meta.outputs.system-name }}
+        value: ${{ jobs.pack.outputs.system-name }}
       nopcommerce-version:
         description: nopCommerce version the plugin was built against
-        value: ${{ steps.meta.outputs.nopcommerce-version }}
+        value: ${{ jobs.pack.outputs.nopcommerce-version }}
       plugin-version:
         description: Plugin version from plugin.json
-        value: ${{ steps.meta.outputs.plugin-version }}
+        value: ${{ jobs.pack.outputs.plugin-version }}
 
 jobs:
   pack:
@@ -58,6 +45,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      system-name: ${{ steps.meta.outputs.system-name }}
+      nopcommerce-version: ${{ steps.meta.outputs.nopcommerce-version }}
+      plugin-version: ${{ steps.meta.outputs.plugin-version }}
 
     steps:
       - name: Checkout plugin repository
@@ -71,17 +62,11 @@ jobs:
           path: .packager
 
       - name: Clone nopCommerce source
-        # Public repository, cloned anonymously: avoids cross-repository GITHUB_TOKEN
-        # restrictions. The plugin csproj has a ProjectReference to Nop.Web.csproj, so
-        # the plugin cannot be built without the matching nopCommerce source.
         run: |
-          git clone --depth 1 --branch '${{ inputs['nopcommerce-release'] }}' \
-            https://github.com/${{ inputs['nopcommerce-repository'] }}.git nopCommerce
+          git clone --depth 1 --branch '${{ inputs['nopcommerce-release'] }}'             https://github.com/${{ inputs['nopcommerce-repository'] }}.git nopCommerce
 
       - name: Resolve .NET SDK
         id: sdk
-        # Take the SDK from the tree's own global.json rather than pinning one here, so a
-        # different nopCommerce release cannot fail on an SDK mismatch.
         run: |
           version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' nopCommerce/global.json | head -1)
           echo "global.json requests SDK $version"
@@ -112,9 +97,7 @@ jobs:
         run: |
           cd out
           unzip -l plugin-package.zip
-          # nopCommerce matches entry.FullName against forward-slash literals, so a single
-          # backslash entry name means the admin reports zero plugins
-          if unzip -Z1 plugin-package.zip | grep -q '\\'; then
+          if unzip -Z1 plugin-package.zip | grep -q '\'; then
             echo "::error::archive contains backslash entry names; nopCommerce will report 0 plugins"
             exit 1
           fi
